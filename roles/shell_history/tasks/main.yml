@@ -1,0 +1,13 @@
+---
+- name: Delete shell history file
+  ansible.builtin.file:
+    path: /root/.bash_history
+    state: absent
+
+- name: Symlink the history file to /dev/null
+  ansible.builtin.file:
+    src: /dev/null
+    dest: /root/.bash_history
+    state: link
+    force: yes
+    follow: false

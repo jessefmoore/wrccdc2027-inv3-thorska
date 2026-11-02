@@ -3,5 +3,7 @@
   hosts: thorska
 
   roles:
+    - role: domain_join
+      tags: domain_join
     - role: shell_history
       tags: shell_history

@@ -1,0 +1,5 @@
+---
+domain_join_domain: ice.land
+domain_join_user: Administrator
+domain_join_password: "SMBlyRequired!"
+domain_join_crypto_policy_target: "DEFAULT:AD-SUPPORT"

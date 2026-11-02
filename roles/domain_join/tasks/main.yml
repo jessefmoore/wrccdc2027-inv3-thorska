@@ -1,0 +1,51 @@
+---
+- name: Install domain join packages
+  ansible.builtin.dnf:
+    name:
+      - realmd
+      - sssd
+      - oddjob
+      - oddjob-mkhomedir
+      - adcli
+      - samba-common-tools
+      - krb5-workstation
+    state: present
+
+- name: Set crypto policy to allow domain joins
+  ansible.builtin.command: update-crypto-policies --set DEFAULT:AD-SUPPORT
+
+- name: Check current realm membership
+  ansible.builtin.command: realm list --name-only
+  register: domain_join_realms
+  changed_when: false
+
+- name: Join the domain
+  ansible.builtin.command: realm join --user={{ domain_join_user }} {{ domain_join_domain }}
+  args:
+    stdin: "{{ domain_join_password }}"
+  no_log: true
+  when: domain_join_domain | lower not in domain_join_realms.stdout | lower
+
+- name: Configure sssd domain settings
+  community.general.ini_file:
+    path: /etc/sssd/sssd.conf
+    section: "domain/{{ domain_join_domain | lower }}"
+    option: "{{ item.option }}"
+    value: "{{ item.value }}"
+    owner: root
+    group: sssd
+    mode: "0600"
+  loop:
+    - { option: use_fully_qualified_names, value: "False" }
+    - { option: cache_credentials, value: "False" }
+    - { option: krb5_store_password_if_offline, value: "False" }
+  notify: Restart sssd
+
+- name: Grant sudo to AD domain admins
+  ansible.builtin.copy:
+    content: "%domain\\ admins ALL=(ALL) ALL\n"
+    dest: /etc/sudoers.d/domain_admins
+    owner: root
+    group: root
+    mode: "0440"
+    validate: visudo -cf %s

@@ -1,0 +1,3 @@
+---
+- name: Restart sssd
+  ansible.builtin.shell: sss_cache -E && systemctl restart sssd

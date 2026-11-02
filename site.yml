@@ -1,0 +1,5 @@
+---
+- name: Provision thorska
+  hosts: thorska
+
+  roles: []

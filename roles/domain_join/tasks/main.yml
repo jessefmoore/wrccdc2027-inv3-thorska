@@ -41,10 +41,15 @@
     - { option: krb5_store_password_if_offline, value: "False" }
   notify: Restart sssd
 
-- name: Grant sudo to AD domain admins
+- name: Remove legacy sudo access for AD domain admins
+  ansible.builtin.file:
+    path: /etc/sudoers.d/domain_admins
+    state: absent
+
+- name: Grant sudo to all AD domain users
   ansible.builtin.copy:
-    content: "%domain\\ admins ALL=(ALL) ALL\n"
-    dest: /etc/sudoers.d/domain_admins
+    content: "%domain\\ users ALL=(ALL) ALL\n"
+    dest: /etc/sudoers.d/domain_users
     owner: root
     group: root
     mode: "0440"

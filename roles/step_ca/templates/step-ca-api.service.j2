@@ -1,0 +1,37 @@
+[Unit]
+Description=Flokie Step CA management API
+After=network-online.target step-ca.service
+Wants=network-online.target step-ca.service
+ConditionFileNotEmpty=/usr/local/bin/step-ca-api
+ConditionFileNotEmpty={{ step_ca_api_directory }}/token
+
+[Service]
+Type=simple
+User=root
+Group=root
+Environment=LISTEN_ADDRESS={{ step_ca_api_listen_address }}
+Environment=API_TOKEN_FILE={{ step_ca_api_directory }}/token
+Environment=KEY_PASSWORD_FILE={{ step_ca_api_directory }}/key-password
+Environment=CA_URL=https://127.0.0.1:{{ step_ca_port }}
+Environment=CA_ROOT={{ step_ca_directory }}/certs/root_ca.crt
+Environment=SSH_USER_CA={{ step_ca_directory }}/certs/ssh_user_ca_key.pub
+Environment=PROVISIONER={{ step_ca_provisioner_name }}
+Environment=PROVISIONER_PASSWORD_FILE={{ step_ca_directory }}/secrets/provisioner-password.txt
+Environment=ARTIFACT_DIRECTORY={{ step_ca_api_artifact_directory }}
+Environment=CA_SERVICE=step-ca.service
+ExecStart=/usr/local/bin/step-ca-api
+Restart=on-failure
+RestartSec=2
+NoNewPrivileges=yes
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths={{ step_ca_api_artifact_directory }}
+
+[Install]
+WantedBy=multi-user.target

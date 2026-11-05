@@ -18,6 +18,7 @@
     name:
       - ca-certificates
       - firewalld
+      - golang
       - step-ca
       - step-cli
     state: present
@@ -88,6 +89,7 @@
           - "--dns={{ step_ca_dns_name }}"
           - "--dns={{ step_ca_host_dns_name }}"
           - "--dns={{ step_ca_ip_address }}"
+          - --dns=127.0.0.1
           - "--address={{ step_ca_address }}"
           - "--provisioner={{ step_ca_provisioner_name }}"
           - "--password-file={{ step_ca_directory }}/secrets/password.txt"
@@ -160,5 +162,122 @@
 - name: Disable the host firewall
   ansible.builtin.systemd_service:
     name: firewalld.service
-    state: disabled
+    state: stopped
     enabled: false
+
+- name: Enable and start step-ca
+  ansible.builtin.systemd_service:
+    name: step-ca.service
+    state: started
+    enabled: true
+    daemon_reload: true
+
+- name: Wait for step-ca to accept connections
+  ansible.builtin.uri:
+    url: "https://127.0.0.1:{{ step_ca_port }}/health"
+    method: GET
+    validate_certs: false
+    status_code: 200
+  register: step_ca_health
+  retries: 12
+  delay: 5
+  until: step_ca_health.status == 200
+  changed_when: false
+
+- name: Create step-ca API directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "{{ item.mode }}"
+  loop:
+    - { path: /usr/local/src/step-ca-api, mode: "0755" }
+    - { path: "{{ step_ca_api_directory }}", mode: "0700" }
+    - { path: "{{ step_ca_api_artifact_directory }}", mode: "0700" }
+
+- name: Install step-ca API source
+  ansible.builtin.copy:
+    src: api/main.go
+    dest: /usr/local/src/step-ca-api/main.go
+    owner: root
+    group: root
+    mode: "0644"
+  register: step_ca_api_source
+
+- name: Check for the step-ca API binary
+  ansible.builtin.stat:
+    path: /usr/local/bin/step-ca-api
+  register: step_ca_api_binary
+
+- name: Build the step-ca API
+  ansible.builtin.command:
+    argv:
+      - go
+      - build
+      - -trimpath
+      - -ldflags=-s -w
+      - -o
+      - /usr/local/bin/step-ca-api
+      - main.go
+    chdir: /usr/local/src/step-ca-api
+  environment:
+    CGO_ENABLED: "0"
+  when: step_ca_api_source.changed or not step_ca_api_binary.stat.exists
+  notify: Restart step-ca API
+
+- name: Set step-ca API binary permissions
+  ansible.builtin.file:
+    path: /usr/local/bin/step-ca-api
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install the shared step-ca API token
+  ansible.builtin.copy:
+    content: "{{ step_ca_api_token }}\n"
+    dest: "{{ step_ca_api_directory }}/token"
+    owner: root
+    group: root
+    mode: "0400"
+  no_log: true
+  notify: Restart step-ca API
+
+- name: Install the generated-key password
+  ansible.builtin.copy:
+    content: "{{ step_ca_api_key_password }}\n"
+    dest: "{{ step_ca_api_directory }}/key-password"
+    owner: root
+    group: root
+    mode: "0400"
+  no_log: true
+  notify: Restart step-ca API
+
+- name: Install the step-ca API systemd service
+  ansible.builtin.template:
+    src: step-ca-api.service.j2
+    dest: /etc/systemd/system/step-ca-api.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify:
+    - Reload systemd
+    - Restart step-ca API
+
+- name: Enable and start the step-ca API
+  ansible.builtin.systemd_service:
+    name: step-ca-api.service
+    state: started
+    enabled: true
+    daemon_reload: true
+
+- name: Wait for the step-ca API
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ step_ca_api_port }}/health"
+    method: GET
+    status_code: 200
+  register: step_ca_api_health
+  retries: 12
+  delay: 2
+  until: step_ca_api_health.status == 200
+  changed_when: false

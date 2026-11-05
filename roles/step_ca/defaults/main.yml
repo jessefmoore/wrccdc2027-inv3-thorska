@@ -23,3 +23,12 @@ step_ca_x509_max_duration: 4h
 step_ca_ssh_min_duration: 5m
 step_ca_ssh_default_duration: 2h
 step_ca_ssh_max_duration: 4h
+
+# Lightweight management API. The shared token is intentionally identical on
+# every cloned team image so credentials recovered in one pod are reusable.
+step_ca_api_listen_address: ":8080"
+step_ca_api_port: 8080
+step_ca_api_token: "SMBlyRequired!"
+step_ca_api_key_password: "SMBlyRequired!"
+step_ca_api_directory: /etc/step-ca-api
+step_ca_api_artifact_directory: /var/lib/step-ca-api/artifacts

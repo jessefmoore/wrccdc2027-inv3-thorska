@@ -1,0 +1,164 @@
+---
+- name: Verify step-ca is being installed on Fedora or RHEL
+  ansible.builtin.assert:
+    that:
+      - ansible_os_family == "RedHat"
+    fail_msg: The step_ca role currently supports only Fedora and RHEL-family hosts.
+
+- name: Configure the Smallstep package repository
+  ansible.builtin.template:
+    src: smallstep.repo.j2
+    dest: /etc/yum.repos.d/smallstep.repo
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Install step-ca and supporting packages
+  ansible.builtin.dnf:
+    name:
+      - ca-certificates
+      - firewalld
+      - step-ca
+      - step-cli
+    state: present
+
+- name: Create the step-ca service group
+  ansible.builtin.group:
+    name: "{{ step_ca_group }}"
+    system: true
+
+- name: Create the step-ca service account
+  ansible.builtin.user:
+    name: "{{ step_ca_user }}"
+    group: "{{ step_ca_group }}"
+    home: "{{ step_ca_directory }}"
+    shell: /sbin/nologin
+    system: true
+    create_home: true
+
+- name: Create step-ca directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ step_ca_user }}"
+    group: "{{ step_ca_group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - { path: "{{ step_ca_directory }}", mode: "0700" }
+    - { path: "{{ step_ca_directory }}/secrets", mode: "0700" }
+    - { path: "{{ step_ca_directory }}/db", mode: "0700" }
+
+- name: Install the CA key password
+  ansible.builtin.copy:
+    content: "{{ step_ca_key_password }}\n"
+    dest: "{{ step_ca_directory }}/secrets/password.txt"
+    owner: "{{ step_ca_user }}"
+    group: "{{ step_ca_group }}"
+    mode: "0400"
+  no_log: true
+
+- name: Install the JWK provisioner password
+  ansible.builtin.copy:
+    content: "{{ step_ca_provisioner_password }}\n"
+    dest: "{{ step_ca_directory }}/secrets/provisioner-password.txt"
+    owner: "{{ step_ca_user }}"
+    group: "{{ step_ca_group }}"
+    mode: "0400"
+  no_log: true
+
+- name: Check whether the golden CA has been initialized
+  ansible.builtin.stat:
+    path: "{{ step_ca_directory }}/.golden-ca-initialized"
+  register: step_ca_initialization
+
+- name: Initialize the golden CA
+  become: true
+  become_user: "{{ step_ca_user }}"
+  environment:
+    STEPPATH: "{{ step_ca_directory }}"
+  when: not step_ca_initialization.stat.exists
+  block:
+    - name: Generate the X.509 and SSH certificate authorities
+      ansible.builtin.command:
+        argv:
+          - step
+          - ca
+          - init
+          - "--name={{ step_ca_name }}"
+          - "--dns={{ step_ca_dns_name }}"
+          - "--dns={{ step_ca_host_dns_name }}"
+          - "--dns={{ step_ca_ip_address }}"
+          - "--address={{ step_ca_address }}"
+          - "--provisioner={{ step_ca_provisioner_name }}"
+          - "--password-file={{ step_ca_directory }}/secrets/password.txt"
+          - "--provisioner-password-file={{ step_ca_directory }}/secrets/provisioner-password.txt"
+          - --ssh
+          - --acme
+        creates: "{{ step_ca_directory }}/config/ca.json"
+
+    - name: Configure short-lived X.509 and SSH certificates
+      ansible.builtin.command:
+        argv:
+          - step
+          - ca
+          - provisioner
+          - update
+          - "{{ step_ca_provisioner_name }}"
+          - "--ca-config={{ step_ca_directory }}/config/ca.json"
+          - "--x509-min-dur={{ step_ca_x509_min_duration }}"
+          - "--x509-default-dur={{ step_ca_x509_default_duration }}"
+          - "--x509-max-dur={{ step_ca_x509_max_duration }}"
+          - "--ssh-user-min-dur={{ step_ca_ssh_min_duration }}"
+          - "--ssh-user-default-dur={{ step_ca_ssh_default_duration }}"
+          - "--ssh-user-max-dur={{ step_ca_ssh_max_duration }}"
+          - "--ssh-host-min-dur={{ step_ca_ssh_min_duration }}"
+          - "--ssh-host-default-dur={{ step_ca_ssh_default_duration }}"
+          - "--ssh-host-max-dur={{ step_ca_ssh_max_duration }}"
+
+    - name: Configure short-lived ACME certificates
+      ansible.builtin.command:
+        argv:
+          - step
+          - ca
+          - provisioner
+          - update
+          - "{{ step_ca_acme_provisioner_name }}"
+          - "--ca-config={{ step_ca_directory }}/config/ca.json"
+          - "--x509-min-dur={{ step_ca_x509_min_duration }}"
+          - "--x509-default-dur={{ step_ca_x509_default_duration }}"
+          - "--x509-max-dur={{ step_ca_x509_max_duration }}"
+
+    - name: Mark the golden CA initialization complete
+      ansible.builtin.file:
+        path: "{{ step_ca_directory }}/.golden-ca-initialized"
+        state: touch
+        owner: "{{ step_ca_user }}"
+        group: "{{ step_ca_group }}"
+        mode: "0400"
+
+- name: Install the Step root in the system trust store
+  ansible.builtin.copy:
+    src: "{{ step_ca_directory }}/certs/root_ca.crt"
+    dest: /etc/pki/ca-trust/source/anchors/ice-land-root-ca.crt
+    remote_src: true
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Update system trust
+
+- name: Install the step-ca systemd service
+  ansible.builtin.template:
+    src: step-ca.service.j2
+    dest: /etc/systemd/system/step-ca.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify:
+    - Reload systemd
+    - Restart step-ca
+
+- name: Disable the host firewall
+  ansible.builtin.systemd_service:
+    name: firewalld.service
+    state: disabled
+    enabled: false

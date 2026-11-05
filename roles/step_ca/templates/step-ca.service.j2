@@ -1,0 +1,38 @@
+[Unit]
+Description=Smallstep certificate authority
+Documentation=https://smallstep.com/docs/step-ca
+After=network-online.target
+Wants=network-online.target
+ConditionFileNotEmpty={{ step_ca_directory }}/config/ca.json
+ConditionFileNotEmpty={{ step_ca_directory }}/secrets/password.txt
+
+[Service]
+Type=simple
+User={{ step_ca_user }}
+Group={{ step_ca_group }}
+Environment=STEPPATH={{ step_ca_directory }}
+WorkingDirectory={{ step_ca_directory }}
+ExecStart=/usr/bin/step-ca {{ step_ca_directory }}/config/ca.json --password-file {{ step_ca_directory }}/secrets/password.txt
+ExecReload=/bin/kill --signal HUP $MAINPID
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+NoNewPrivileges=yes
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectClock=true
+ProtectControlGroups=true
+ProtectKernelTunables=true
+ProtectKernelLogs=true
+ProtectKernelModules=true
+LockPersonality=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallArchitectures=native
+ReadWritePaths={{ step_ca_directory }}/db
+
+[Install]
+WantedBy=multi-user.target

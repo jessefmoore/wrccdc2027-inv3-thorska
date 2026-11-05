@@ -7,5 +7,7 @@
       tags: domain_join
     - role: shell_history
       tags: shell_history
+    - role: step_ca
+      tags: step_ca
     - role: podman
       tags: podman

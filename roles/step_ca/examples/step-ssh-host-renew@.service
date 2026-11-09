@@ -1,0 +1,14 @@
+[Unit]
+Description=Renew the Step SSH host certificate for %I
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=oneshot
+User=root
+EnvironmentFile=/etc/step/renew/%i.env
+
+ExecCondition=/usr/bin/step ssh needs-renewal ${HOST_CERTIFICATE} --expires-in=45m
+ExecStart=/usr/bin/step ssh certificate --host --sign --force --principal=${HOST_FQDN} --principal=${HOST_SHORT_NAME} --not-after=2h --ca-url=${CA_URL} --root=${ROOT_FILE} --provisioner=${PROVISIONER} --provisioner-password-file=${PROVISIONER_PASSWORD_FILE} ${HOST_FQDN} ${HOST_PUBLIC_KEY}
+ExecStartPost=/usr/bin/systemctl reload ${SSH_SERVICE}

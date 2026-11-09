@@ -5,8 +5,10 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -14,6 +16,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/go-ldap/ldap/v3"
 )
 
 const maxRequestSize = 1 << 20
@@ -25,15 +29,30 @@ type config struct {
 	caURL                   string
 	caRoot                  string
 	sshUserCA               string
+	sshHostCA               string
 	provisioner             string
 	provisionerPasswordFile string
 	artifactDirectory       string
 	caService               string
+	ldapURL                 string
+	ldapUPNSuffix           string
+	ldapTimeout             time.Duration
 }
 
 type api struct {
-	config config
-	token  string
+	config           config
+	token            string
+	authenticateLDAP func(context.Context, string, string) error
+}
+
+type authenticatedUserContextKey struct{}
+
+var errInvalidCredentials = errors.New("invalid LDAP credentials")
+
+type loggingResponseWriter struct {
+	http.ResponseWriter
+	status int
+	bytes  int
 }
 
 type x509Request struct {
@@ -47,6 +66,7 @@ type sshRequest struct {
 	PublicKey  string   `json:"public_key"`
 	Principals []string `json:"principals"`
 	Duration   string   `json:"duration"`
+	Host       bool     `json:"host"`
 }
 
 type actionRequest struct {
@@ -61,10 +81,14 @@ func main() {
 		caURL:                   env("CA_URL", "https://127.0.0.1:9000"),
 		caRoot:                  env("CA_ROOT", "/etc/step-ca/certs/root_ca.crt"),
 		sshUserCA:               env("SSH_USER_CA", "/etc/step-ca/certs/ssh_user_ca_key.pub"),
+		sshHostCA:               env("SSH_HOST_CA", "/etc/step-ca/certs/ssh_host_ca_key.pub"),
 		provisioner:             env("PROVISIONER", "admin"),
 		provisionerPasswordFile: env("PROVISIONER_PASSWORD_FILE", "/etc/step-ca/secrets/provisioner-password.txt"),
 		artifactDirectory:       env("ARTIFACT_DIRECTORY", "/var/lib/step-ca-api/artifacts"),
 		caService:               env("CA_SERVICE", "step-ca.service"),
+		ldapURL:                 env("LDAP_URL", "ldap://vattar.ice.land:389"),
+		ldapUPNSuffix:           env("LDAP_UPN_SUFFIX", "ice.land"),
+		ldapTimeout:             envDuration("LDAP_TIMEOUT", 5*time.Second),
 	}
 
 	tokenBytes, err := os.ReadFile(cfg.apiTokenFile)
@@ -76,11 +100,13 @@ func main() {
 	}
 
 	a := &api{config: cfg, token: strings.TrimSpace(string(tokenBytes))}
+	a.authenticateLDAP = a.bindLDAP
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", a.index)
 	mux.HandleFunc("/health", a.health)
 	mux.HandleFunc("/trust/root.pem", a.rootCertificate)
 	mux.HandleFunc("/trust/ssh-user-ca.pub", a.sshUserCAPublicKey)
+	mux.HandleFunc("/trust/ssh-host-ca.pub", a.sshHostCAPublicKey)
 	mux.Handle("/v1/ca", a.authorize(http.HandlerFunc(a.caStatus)))
 	mux.Handle("/v1/ca/action", a.authorize(http.HandlerFunc(a.caAction)))
 	mux.Handle("/v1/certificates/x509", a.authorize(http.HandlerFunc(a.issueX509)))
@@ -108,28 +134,105 @@ func env(name, fallback string) string {
 	return fallback
 }
 
+func envDuration(name string, fallback time.Duration) time.Duration {
+	value := os.Getenv(name)
+	if value == "" {
+		return fallback
+	}
+	duration, err := time.ParseDuration(value)
+	if err != nil {
+		log.Fatalf("parse %s: %v", name, err)
+	}
+	return duration
+}
+
 func requestLogger(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
-		next.ServeHTTP(w, r)
-		log.Printf("%s %s %s", r.Method, r.URL.Path, time.Since(start).Round(time.Millisecond))
+		response := &loggingResponseWriter{ResponseWriter: w}
+		next.ServeHTTP(response, r)
+		log.Printf("method=%s path=%s status=%d bytes=%d remote=%s duration=%s",
+			r.Method, r.URL.Path, response.status, response.bytes, r.RemoteAddr,
+			time.Since(start).Round(time.Millisecond))
 	})
+}
+
+func (w *loggingResponseWriter) WriteHeader(status int) {
+	if w.status != 0 {
+		return
+	}
+	w.status = status
+	w.ResponseWriter.WriteHeader(status)
+}
+
+func (w *loggingResponseWriter) Write(contents []byte) (int, error) {
+	if w.status == 0 {
+		w.WriteHeader(http.StatusOK)
+	}
+	written, err := w.ResponseWriter.Write(contents)
+	w.bytes += written
+	return written, err
 }
 
 func (a *api) authorize(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		authorization := r.Header.Get("Authorization")
-		if !strings.HasPrefix(authorization, "Bearer ") {
-			writeError(w, http.StatusUnauthorized, "invalid bearer token")
-			return
-		}
-		provided := strings.TrimSpace(strings.TrimPrefix(authorization, "Bearer "))
+		provided := strings.TrimSpace(r.Header.Get("X-API-Key"))
 		if len(provided) != len(a.token) || subtle.ConstantTimeCompare([]byte(provided), []byte(a.token)) != 1 {
-			writeError(w, http.StatusUnauthorized, "invalid bearer token")
+			writeError(w, http.StatusUnauthorized, "invalid API key")
 			return
 		}
-		next.ServeHTTP(w, r)
+
+		username, password, ok := r.BasicAuth()
+		username = strings.TrimSpace(username)
+		if !ok || username == "" || password == "" {
+			w.Header().Set("WWW-Authenticate", `Basic realm="ice.land"`)
+			writeError(w, http.StatusUnauthorized, "domain username and password are required")
+			return
+		}
+		bindUsername := a.ldapBindUsername(username)
+		if err := a.authenticateLDAP(r.Context(), bindUsername, password); err != nil {
+			if errors.Is(err, errInvalidCredentials) {
+				log.Printf("LDAP authentication rejected user=%q remote=%q", bindUsername, r.RemoteAddr)
+				writeError(w, http.StatusUnauthorized, "invalid domain credentials")
+				return
+			}
+			log.Printf("LDAP authentication unavailable user=%q remote=%q error=%q", bindUsername, r.RemoteAddr, err)
+			writeError(w, http.StatusServiceUnavailable, "domain authentication unavailable")
+			return
+		}
+
+		ctx := context.WithValue(r.Context(), authenticatedUserContextKey{}, bindUsername)
+		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+func (a *api) ldapBindUsername(username string) string {
+	if strings.ContainsAny(username, "@\\") || a.config.ldapUPNSuffix == "" {
+		return username
+	}
+	return username + "@" + a.config.ldapUPNSuffix
+}
+
+func (a *api) bindLDAP(_ context.Context, username, password string) error {
+	dialer := &net.Dialer{Timeout: a.config.ldapTimeout}
+	connection, err := ldap.DialURL(a.config.ldapURL, ldap.DialWithDialer(dialer))
+	if err != nil {
+		return fmt.Errorf("connect to LDAP: %w", err)
+	}
+	defer connection.Close()
+	connection.SetTimeout(a.config.ldapTimeout)
+	if err := connection.Bind(username, password); err != nil {
+		if ldap.IsErrorWithCode(err, ldap.LDAPResultInvalidCredentials) {
+			return errInvalidCredentials
+		}
+		return fmt.Errorf("LDAP bind: %w", err)
+	}
+	return nil
+}
+
+func authenticatedUser(ctx context.Context) string {
+	username, _ := ctx.Value(authenticatedUserContextKey{}).(string)
+	return username
 }
 
 func (a *api) index(w http.ResponseWriter, r *http.Request) {
@@ -139,7 +242,7 @@ func (a *api) index(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"name":                    "Flokie Step CA API",
-		"public_endpoints":        []string{"GET /health", "GET /trust/root.pem", "GET /trust/ssh-user-ca.pub"},
+		"public_endpoints":        []string{"GET /health", "GET /trust/root.pem", "GET /trust/ssh-user-ca.pub", "GET /trust/ssh-host-ca.pub"},
 		"authenticated_endpoints": []string{"GET /v1/ca", "POST /v1/ca/action", "POST /v1/certificates/x509", "POST /v1/certificates/ssh"},
 	})
 }
@@ -158,6 +261,10 @@ func (a *api) rootCertificate(w http.ResponseWriter, r *http.Request) {
 
 func (a *api) sshUserCAPublicKey(w http.ResponseWriter, r *http.Request) {
 	a.serveTrustFile(w, r, a.config.sshUserCA, "text/plain; charset=utf-8")
+}
+
+func (a *api) sshHostCAPublicKey(w http.ResponseWriter, r *http.Request) {
+	a.serveTrustFile(w, r, a.config.sshHostCA, "text/plain; charset=utf-8")
 }
 
 func (a *api) serveTrustFile(w http.ResponseWriter, r *http.Request, path, contentType string) {
@@ -209,9 +316,12 @@ func (a *api) caAction(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	output, err := exec.CommandContext(ctx, "systemctl", request.Action, a.config.caService).CombinedOutput()
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, commandError(err, output))
+		message := commandError(err, output)
+		log.Printf("CA action failed authenticated_user=%q action=%q error=%q", authenticatedUser(r.Context()), request.Action, message)
+		writeError(w, http.StatusInternalServerError, message)
 		return
 	}
+	log.Printf("CA action completed authenticated_user=%q action=%q", authenticatedUser(r.Context()), request.Action)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "action": request.Action})
 }
 
@@ -257,7 +367,10 @@ func (a *api) issueX509(w http.ResponseWriter, r *http.Request) {
 	}
 	if output, err := a.runStep(r.Context(), args...); err != nil {
 		_ = os.RemoveAll(directory)
-		writeError(w, http.StatusBadRequest, commandError(err, output))
+		message := commandError(err, output)
+		log.Printf("X.509 issuance failed authenticated_user=%q subject=%q sans=%q duration=%q error=%q",
+			authenticatedUser(r.Context()), request.Subject, request.SANs, request.Duration, message)
+		writeError(w, http.StatusBadRequest, message)
 		return
 	}
 
@@ -265,9 +378,13 @@ func (a *api) issueX509(w http.ResponseWriter, r *http.Request) {
 	privateKey, keyErr := os.ReadFile(privateKeyPath)
 	keyPassword, passwordErr := os.ReadFile(a.config.keyPasswordFile)
 	if certErr != nil || keyErr != nil || passwordErr != nil {
+		log.Printf("X.509 artifact read failed id=%q cert_error=%v key_error=%v password_error=%v",
+			id, certErr, keyErr, passwordErr)
 		writeError(w, http.StatusInternalServerError, "certificate was issued but its artifacts could not be read")
 		return
 	}
+	log.Printf("X.509 certificate issued authenticated_user=%q id=%q subject=%q sans=%q duration=%q",
+		authenticatedUser(r.Context()), id, request.Subject, request.SANs, request.Duration)
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"id": id, "subject": request.Subject, "sans": request.SANs,
 		"certificate": string(certificate), "private_key": string(privateKey),
@@ -313,6 +430,9 @@ func (a *api) issueSSH(w http.ResponseWriter, r *http.Request) {
 		"--provisioner-password-file=" + a.config.provisionerPasswordFile,
 		"--not-after=" + request.Duration,
 	}
+	if request.Host {
+		args = append(args, "--host")
+	}
 	for _, principal := range request.Principals {
 		if strings.TrimSpace(principal) != "" {
 			args = append(args, "--principal="+strings.TrimSpace(principal))
@@ -321,19 +441,25 @@ func (a *api) issueSSH(w http.ResponseWriter, r *http.Request) {
 	args = append(args, request.KeyID, publicKeyPath)
 	if output, err := a.runStep(r.Context(), args...); err != nil {
 		_ = os.RemoveAll(directory)
-		writeError(w, http.StatusBadRequest, commandError(err, output))
+		message := commandError(err, output)
+		log.Printf("SSH issuance failed authenticated_user=%q key_id=%q principals=%q host=%t duration=%q error=%q",
+			authenticatedUser(r.Context()), request.KeyID, request.Principals, request.Host, request.Duration, message)
+		writeError(w, http.StatusBadRequest, message)
 		return
 	}
 
 	certificatePath := strings.TrimSuffix(publicKeyPath, ".pub") + "-cert.pub"
 	certificate, err := os.ReadFile(certificatePath)
 	if err != nil {
+		log.Printf("SSH artifact read failed id=%q path=%q error=%q", id, certificatePath, err)
 		writeError(w, http.StatusInternalServerError, "SSH certificate was issued but could not be read")
 		return
 	}
+	log.Printf("SSH certificate issued authenticated_user=%q id=%q key_id=%q principals=%q host=%t duration=%q",
+		authenticatedUser(r.Context()), id, request.KeyID, request.Principals, request.Host, request.Duration)
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"id": id, "key_id": request.KeyID, "principals": request.Principals,
-		"certificate": string(certificate),
+		"host": request.Host, "certificate": strings.TrimSpace(string(certificate)),
 	})
 }
 

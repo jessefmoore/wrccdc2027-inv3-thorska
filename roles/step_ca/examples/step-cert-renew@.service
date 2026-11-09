@@ -1,0 +1,15 @@
+[Unit]
+Description=Renew the Step certificate for %I
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=oneshot
+User=root
+EnvironmentFile=/etc/step/renew/%i.env
+
+ExecCondition=/usr/bin/step certificate needs-renewal --expires-in=5m ${CERT_FILE}
+
+ExecStart=/usr/bin/step ca renew ${CERT_FILE} ${KEY_FILE} --force --ca-url=${CA_URL} --root=${ROOT_FILE} --password-file=${KEY_PASSWORD_FILE}
+ExecStartPost=/usr/bin/systemctl try-reload-or-restart ${RELOAD_UNIT}

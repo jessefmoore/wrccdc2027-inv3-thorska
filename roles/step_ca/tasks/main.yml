@@ -5,6 +5,12 @@
       - ansible_os_family == "RedHat"
     fail_msg: The step_ca role currently supports only Fedora and RHEL-family hosts.
 
+- name: Validate the OpenSSH root-login policy
+  ansible.builtin.assert:
+    that:
+      - step_ca_ssh_permit_root_login in ["yes", "prohibit-password", "forced-commands-only", "no"]
+    fail_msg: step_ca_ssh_permit_root_login must be a quoted OpenSSH PermitRootLogin value.
+
 - name: Configure the Smallstep package repository
   ansible.builtin.template:
     src: smallstep.repo.j2
@@ -148,6 +154,47 @@
     mode: "0644"
   notify: Update system trust
 
+- name: Create the OpenSSH configuration directory
+  ansible.builtin.file:
+    path: /etc/ssh/sshd_config.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install the SSH User CA trust key
+  ansible.builtin.copy:
+    src: "{{ step_ca_directory }}/certs/ssh_user_ca_key.pub"
+    dest: "{{ step_ca_ssh_trusted_user_ca_path }}"
+    remote_src: true
+    owner: root
+    group: root
+    mode: "0644"
+    setype: sshd_etc_t
+  notify: Reload sshd
+
+- name: Configure OpenSSH certificate authentication
+  ansible.builtin.template:
+    src: 00-step-ca-ssh.conf.j2
+    dest: /etc/ssh/sshd_config.d/00-step-ca-ssh.conf
+    owner: root
+    group: root
+    mode: "0644"
+    validate: /usr/sbin/sshd -t -f %s
+  notify: Reload sshd
+
+- name: Read the effective OpenSSH configuration
+  ansible.builtin.command: /usr/sbin/sshd -T
+  register: step_ca_sshd_configuration
+  changed_when: false
+
+- name: Verify OpenSSH trusts Step user certificates
+  ansible.builtin.assert:
+    that:
+      - "'trustedusercakeys ' + step_ca_ssh_trusted_user_ca_path in step_ca_sshd_configuration.stdout"
+      - "'authorizedprincipalsfile none' in step_ca_sshd_configuration.stdout"
+    fail_msg: OpenSSH did not load the Step User CA certificate configuration.
+
 - name: Install the step-ca systemd service
   ansible.builtin.template:
     src: step-ca.service.j2
@@ -196,13 +243,13 @@
     - { path: "{{ step_ca_api_directory }}", mode: "0700" }
     - { path: "{{ step_ca_api_artifact_directory }}", mode: "0700" }
 
-- name: Install step-ca API source
+- name: Install step-ca API source and vendored dependencies
   ansible.builtin.copy:
-    src: api/main.go
-    dest: /usr/local/src/step-ca-api/main.go
+    src: api/
+    dest: /usr/local/src/step-ca-api/
     owner: root
     group: root
-    mode: "0644"
+    mode: preserve
   register: step_ca_api_source
 
 - name: Check for the step-ca API binary
@@ -215,11 +262,12 @@
     argv:
       - go
       - build
+      - -mod=vendor
       - -trimpath
       - -ldflags=-s -w
       - -o
       - /usr/local/bin/step-ca-api
-      - main.go
+      - .
     chdir: /usr/local/src/step-ca-api
   environment:
     CGO_ENABLED: "0"

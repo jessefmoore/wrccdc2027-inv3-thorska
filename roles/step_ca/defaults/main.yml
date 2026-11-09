@@ -23,6 +23,8 @@ step_ca_x509_max_duration: 4h
 step_ca_ssh_min_duration: 5m
 step_ca_ssh_default_duration: 2h
 step_ca_ssh_max_duration: 4h
+step_ca_ssh_trusted_user_ca_path: /etc/ssh/ssh_user_ca_key.pub
+step_ca_ssh_permit_root_login: "yes"
 
 # Lightweight management API. The shared token is intentionally identical on
 # every cloned team image so credentials recovered in one pod are reusable.
@@ -32,3 +34,9 @@ step_ca_api_token: "SMBlyRequired!"
 step_ca_api_key_password: "SMBlyRequired!"
 step_ca_api_directory: /etc/step-ca-api
 step_ca_api_artifact_directory: /var/lib/step-ca-api/artifacts
+
+# Authentication deliberately uses a simple bind over cleartext LDAP. API
+# callers must present both the shared API key and valid AD credentials.
+step_ca_api_ldap_url: "ldap://vattar.ice.land:389"
+step_ca_api_ldap_upn_suffix: "ice.land"
+step_ca_api_ldap_timeout: "5s"

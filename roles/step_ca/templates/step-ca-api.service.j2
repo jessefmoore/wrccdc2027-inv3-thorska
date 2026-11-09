@@ -15,10 +15,14 @@ Environment=KEY_PASSWORD_FILE={{ step_ca_api_directory }}/key-password
 Environment=CA_URL=https://127.0.0.1:{{ step_ca_port }}
 Environment=CA_ROOT={{ step_ca_directory }}/certs/root_ca.crt
 Environment=SSH_USER_CA={{ step_ca_directory }}/certs/ssh_user_ca_key.pub
+Environment=SSH_HOST_CA={{ step_ca_directory }}/certs/ssh_host_ca_key.pub
 Environment=PROVISIONER={{ step_ca_provisioner_name }}
 Environment=PROVISIONER_PASSWORD_FILE={{ step_ca_directory }}/secrets/provisioner-password.txt
 Environment=ARTIFACT_DIRECTORY={{ step_ca_api_artifact_directory }}
 Environment=CA_SERVICE=step-ca.service
+Environment=LDAP_URL={{ step_ca_api_ldap_url }}
+Environment=LDAP_UPN_SUFFIX={{ step_ca_api_ldap_upn_suffix }}
+Environment=LDAP_TIMEOUT={{ step_ca_api_ldap_timeout }}
 ExecStart=/usr/local/bin/step-ca-api
 Restart=on-failure
 RestartSec=2

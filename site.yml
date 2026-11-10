@@ -2,6 +2,13 @@
 - name: Provision thorska
   hosts: thorska
 
+  # Shared by roles that change sshd config (step_ca, blackteam_ssh).
+  handlers:
+    - name: Reload sshd
+      ansible.builtin.systemd_service:
+        name: sshd.service
+        state: reloaded
+
   roles:
     - role: domain_join
       tags: domain_join
@@ -9,5 +16,7 @@
       tags: shell_history
     - role: step_ca
       tags: step_ca
+    - role: blackteam_ssh
+      tags: blackteam_ssh
     - role: podman
       tags: podman

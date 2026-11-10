@@ -1,0 +1,37 @@
+---
+# Same file as step_ca's TrustedUserCAKeys: sshd only reads the first one, so
+# both CAs share it. Uses the "Reload sshd" handler in site.yml.
+- name: Add Vault SSH CA public key
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/ssh_user_ca_key.pub
+    line: "{{ blackteam_ssh_ca_pubkey }}"
+    create: true
+    mode: "0644"
+    setype: sshd_etc_t
+  notify: Reload sshd
+
+# Prints the username itself (so step-ca certs keep working, like
+# "AuthorizedPrincipalsFile none") plus the extra principals for that account.
+- name: Install the principals command
+  ansible.builtin.copy:
+    dest: /usr/local/libexec/ssh-principals
+    mode: "0755"
+    content: |
+      #!/bin/sh
+      echo "$1"
+      case "$1" in
+      {% for user, principals in blackteam_ssh_principals.items() %}
+        {{ user }}) printf '%s\n' {{ principals | map('quote') | join(' ') }} ;;
+      {% endfor %}
+      esac
+
+- name: Trust the CA in sshd_config
+  ansible.builtin.copy:
+    dest: /etc/ssh/sshd_config.d/01-blackteam-ssh.conf
+    mode: "0644"
+    content: |
+      TrustedUserCAKeys /etc/ssh/ssh_user_ca_key.pub
+      AuthorizedPrincipalsCommand /usr/local/libexec/ssh-principals %u
+      AuthorizedPrincipalsCommandUser nobody
+    validate: /usr/sbin/sshd -t -f %s
+  notify: Reload sshd

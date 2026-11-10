@@ -13,11 +13,6 @@
     name: step-ca-api.service
     state: restarted
 
-- name: Reload sshd
-  ansible.builtin.systemd_service:
-    name: sshd.service
-    state: reloaded
-
 - name: Update system trust
   ansible.builtin.command: update-ca-trust
   changed_when: true

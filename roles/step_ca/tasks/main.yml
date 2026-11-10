@@ -162,11 +162,18 @@
     group: root
     mode: "0755"
 
-- name: Install the SSH User CA trust key
-  ansible.builtin.copy:
+- name: Read the SSH User CA public key
+  ansible.builtin.slurp:
     src: "{{ step_ca_directory }}/certs/ssh_user_ca_key.pub"
-    dest: "{{ step_ca_ssh_trusted_user_ca_path }}"
-    remote_src: true
+  register: step_ca_ssh_user_ca_key
+
+# Line-based (not copy) so blackteam_ssh can add its CA key to the same file.
+# sshd only honors the first TrustedUserCAKeys, so every CA has to share it.
+- name: Install the SSH User CA trust key
+  ansible.builtin.lineinfile:
+    path: "{{ step_ca_ssh_trusted_user_ca_path }}"
+    line: "{{ step_ca_ssh_user_ca_key.content | b64decode | trim }}"
+    create: true
     owner: root
     group: root
     mode: "0644"

@@ -305,6 +305,32 @@ environment.
 
 ## Scoring guidance
 
+The repository includes `scripts/check_ca_ssh.py` for an end-to-end issuance
+and login check. It prompts for the domain password, generates an ephemeral
+keypair, requests a certificate, disables password fallback, runs `whoami` on
+the target, and deletes its temporary keys afterward:
+
+```bash
+./scripts/check_ca_ssh.py 192.168.220.231 \
+  --username scoring@ice.land
+```
+
+By default, a username such as `scoring@ice.land` becomes the Linux principal
+and login name `scoring`. Override both values for Windows or other account-name
+formats:
+
+```bash
+./scripts/check_ca_ssh.py 192.168.220.10 \
+  --username scoring@ice.land \
+  --principal alice@ice.land \
+  --login-user alice@ice.land
+```
+
+For noninteractive scoring, provide `DOMAIN_PASSWORD`, `STEP_CA_API_KEY`, and
+optionally `STEP_CA_API_URL` through the scoring engine's secret configuration.
+The script exits zero only when issuance, certificate validation, SSH login, and
+the remote command all succeed.
+
 For HTTPS, perform a normal TLS connection using `root_ca.crt`, verify the SAN,
 chain and current validity, and then perform the existing application checks.
 

@@ -1,0 +1,142 @@
+- name: Create Home Assistant and Caddy directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - /var/lib/homeassistant
+    - /etc/caddy
+    - /var/lib/caddy
+
+- name: Install quadlets
+  ansible.builtin.copy:
+    src: "{{ item }}"
+    dest: /etc/containers/systemd/{{ item }}
+    owner: root
+    group: root
+    mode: "0644"
+  loop:
+    - homeassistant.network
+    - homeassistant.Containerfile
+    - homeassistant.build
+    - homeassistant.container
+    - caddy.container
+  notify:
+    - Reload systemd
+    - Rebuild Home Assistant image
+    - Restart Home Assistant
+    - Restart Caddy
+
+- name: Install Home Assistant configuration
+  ansible.builtin.copy:
+    src: configuration.yaml
+    dest: /var/lib/homeassistant/configuration.yaml
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart Home Assistant
+
+- name: Install LDAP auth script
+  ansible.builtin.copy:
+    src: ldap_auth.sh
+    dest: /var/lib/homeassistant/ldap_auth.sh
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install Caddyfile
+  ansible.builtin.copy:
+    src: Caddyfile
+    dest: /etc/caddy/Caddyfile
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart Caddy
+
+- name: Give Caddy the Flokie root CA
+  ansible.builtin.copy:
+    src: /etc/step-ca/certs/root_ca.crt
+    dest: /etc/caddy/root_ca.crt
+    remote_src: true
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart Caddy
+
+# Quadlet units are generated, so they can't be "enabled"; [Install] in the
+# .container file handles starting at boot.
+- name: Start Home Assistant and Caddy
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+    state: started
+    daemon_reload: true
+  loop:
+    - homeassistant.service
+    - caddy.service
+
+# Onboarding: create the local owner and finish the setup wizard via the API,
+# talking to the container directly on the podman network.
+- name: Wait for Home Assistant
+  ansible.builtin.uri:
+    url: http://10.89.10.10:8123/manifest.json
+  register: home_assistant_up
+  retries: 60
+  delay: 10
+  until: home_assistant_up.status == 200
+
+# HA stops serving /api/onboarding (404) once every step is done.
+- name: Check onboarding status
+  ansible.builtin.uri:
+    url: http://10.89.10.10:8123/api/onboarding
+    status_code: [200, 404]
+  register: home_assistant_onboarding
+
+- name: Onboard Home Assistant
+  when: >-
+    home_assistant_onboarding.status == 200 and
+    home_assistant_onboarding.json
+    | selectattr('step', 'equalto', 'user') | map(attribute='done') | first == false
+  block:
+    - name: Create the owner account
+      ansible.builtin.uri:
+        url: http://10.89.10.10:8123/api/onboarding/users
+        method: POST
+        body_format: json
+        body:
+          client_id: http://10.89.10.10:8123/
+          name: Administrator
+          username: admin
+          password: "SMBlyRequired!"
+          language: en
+      register: home_assistant_owner
+
+    - name: Exchange the owner auth code for a token
+      ansible.builtin.uri:
+        url: http://10.89.10.10:8123/auth/token
+        method: POST
+        body_format: form-urlencoded
+        body:
+          grant_type: authorization_code
+          code: "{{ home_assistant_owner.json.auth_code }}"
+          client_id: http://10.89.10.10:8123/
+      register: home_assistant_token
+
+    - name: Finish the remaining onboarding steps
+      ansible.builtin.uri:
+        url: http://10.89.10.10:8123/api/onboarding/{{ item.step }}
+        method: POST
+        headers:
+          Authorization: Bearer {{ home_assistant_token.json.access_token }}
+        body_format: json
+        body: "{{ item.body }}"
+      loop:
+        - step: core_config
+          body: {}
+        - step: analytics
+          body: {}
+        - step: integration
+          body:
+            client_id: http://10.89.10.10:8123/
+            redirect_uri: http://10.89.10.10:8123/?auth_callback=1

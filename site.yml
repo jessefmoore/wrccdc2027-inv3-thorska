@@ -20,3 +20,5 @@
       tags: blackteam_ssh
     - role: podman
       tags: podman
+    - role: home_assistant
+      tags: home_assistant

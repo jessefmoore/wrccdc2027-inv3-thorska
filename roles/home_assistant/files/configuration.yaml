@@ -1,0 +1,20 @@
+default_config:
+
+homeassistant:
+  name: Showroom
+  time_zone: America/Los_Angeles
+  auth_providers:
+    # Active Directory
+    - type: command_line
+      command: /config/ldap_auth.sh
+      meta: true
+    # Local accounts
+    - type: homeassistant
+
+http:
+  use_x_forwarded_for: true
+  trusted_proxies:
+    - 10.89.10.2 # caddy
+
+prometheus:
+  requires_auth: false

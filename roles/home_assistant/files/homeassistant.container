@@ -1,0 +1,17 @@
+[Unit]
+Description=Home Assistant
+
+[Container]
+ContainerName=homeassistant
+Image=homeassistant.build
+Network=homeassistant.network
+IP=10.89.10.10
+Volume=/var/lib/homeassistant:/config:Z
+Environment=TZ=America/Los_Angeles
+
+[Service]
+Restart=always
+TimeoutStartSec=900
+
+[Install]
+WantedBy=multi-user.target

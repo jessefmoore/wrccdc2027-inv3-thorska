@@ -1,0 +1,20 @@
+- name: Reload systemd
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+
+# The build unit is a oneshot that stays "active", so restarting HA alone
+# would not pick up a changed Containerfile.
+- name: Rebuild Home Assistant image
+  ansible.builtin.systemd_service:
+    name: homeassistant-build.service
+    state: restarted
+
+- name: Restart Home Assistant
+  ansible.builtin.systemd_service:
+    name: homeassistant.service
+    state: restarted
+
+- name: Restart Caddy
+  ansible.builtin.systemd_service:
+    name: caddy.service
+    state: restarted

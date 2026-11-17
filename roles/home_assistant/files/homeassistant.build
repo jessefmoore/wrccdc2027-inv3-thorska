@@ -1,0 +1,6 @@
+[Build]
+ImageTag=localhost/homeassistant-ldap:2025.6.3
+File=/etc/containers/systemd/homeassistant.Containerfile
+
+[Service]
+TimeoutStartSec=900

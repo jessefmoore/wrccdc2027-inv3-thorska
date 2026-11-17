@@ -1,0 +1,11 @@
+{
+	acme_ca https://ca.ice.land:9000/acme/acme/directory
+	acme_ca_root /etc/caddy/root_ca.crt
+	default_sni homeassistant.ice.land
+	fallback_sni homeassistant.ice.land
+}
+
+# "https://" with no host is a catch-all, so any Host header is proxied.
+homeassistant.ice.land, https:// {
+	reverse_proxy homeassistant:8123
+}

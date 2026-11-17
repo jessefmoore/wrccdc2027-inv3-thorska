@@ -1,0 +1,131 @@
+- name: Deploy showroom devices
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Create shared state directory
+      ansible.builtin.file:
+        path: /var/lib/showroom
+        state: directory
+        mode: "0755"
+
+    - name: Install quadlets
+      ansible.builtin.copy:
+        src: /opt/showroom/quadlets/{{ item }}
+        dest: /etc/containers/systemd/{{ item }}
+        remote_src: true
+        mode: "0644"
+      loop:
+        - showroom.build
+        - ljosi.container
+        - loftur.container
+        - vifta.container
+        - gluggi.container
+      register: quadlets
+
+    - name: Reload systemd
+      when: quadlets is changed
+      ansible.builtin.systemd_service:
+        daemon_reload: true
+
+    - name: Read current image
+      ansible.builtin.command: podman images --quiet --no-trunc localhost/showroom:latest
+      register: image_before
+      changed_when: false
+
+    - name: Build firmware
+      ansible.builtin.command:
+        chdir: /opt/showroom
+        cmd: podman build --tag localhost/showroom:latest --file Containerfile .
+      changed_when: false
+
+    - name: Read new image
+      ansible.builtin.command: podman images --quiet --no-trunc localhost/showroom:latest
+      register: image_after
+      changed_when: image_after.stdout != image_before.stdout
+
+    - name: Restart devices
+      when: quadlets is changed or image_after is changed
+      ansible.builtin.systemd_service:
+        name: "{{ item }}.service"
+        state: restarted
+      loop: [ljosi, loftur, vifta, gluggi]
+
+    - name: Start devices
+      ansible.builtin.systemd_service:
+        name: "{{ item }}.service"
+        state: started
+      loop: [ljosi, loftur, vifta, gluggi]
+
+    - name: Wait for Home Assistant
+      ansible.builtin.uri:
+        url: http://10.89.10.10:8123/manifest.json
+      register: ha_up
+      retries: 30
+      delay: 10
+      until: ha_up.status == 200
+
+    - name: Start Home Assistant login
+      ansible.builtin.uri:
+        url: http://10.89.10.10:8123/auth/login_flow
+        method: POST
+        body_format: json
+        body:
+          client_id: http://10.89.10.10:8123/
+          handler: [homeassistant, null]
+          redirect_uri: http://10.89.10.10:8123/
+      register: login_flow
+
+    - name: Submit Home Assistant credentials
+      ansible.builtin.uri:
+        url: http://10.89.10.10:8123/auth/login_flow/{{ login_flow.json.flow_id }}
+        method: POST
+        body_format: json
+        body:
+          client_id: http://10.89.10.10:8123/
+          username: admin
+          password: "SMBlyRequired!"
+      register: login
+
+    - name: Get Home Assistant token
+      ansible.builtin.uri:
+        url: http://10.89.10.10:8123/auth/token
+        method: POST
+        body_format: form-urlencoded
+        body:
+          grant_type: authorization_code
+          code: "{{ login.json.result }}"
+          client_id: http://10.89.10.10:8123/
+      register: token
+      no_log: true
+
+    - name: Start ESPHome config flows
+      ansible.builtin.uri:
+        url: http://10.89.10.10:8123/api/config/config_entries/flow
+        method: POST
+        headers:
+          Authorization: Bearer {{ token.json.access_token }}
+        body_format: json
+        body:
+          handler: esphome
+      loop: [10.89.10.21, 10.89.10.22, 10.89.10.23, 10.89.10.24]
+      register: flows
+
+    - name: Add devices to Home Assistant
+      ansible.builtin.uri:
+        url: http://10.89.10.10:8123/api/config/config_entries/flow/{{ item.json.flow_id }}
+        method: POST
+        headers:
+          Authorization: Bearer {{ token.json.access_token }}
+        body_format: json
+        body:
+          host: "{{ item.item }}"
+          port: 6053
+      loop: "{{ flows.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+      register: added
+      changed_when: added.json.type == 'create_entry'
+      failed_when: >-
+        added.json.type not in ['create_entry', 'abort'] or
+        (added.json.type == 'abort' and not added.json.reason.startswith('already_configured'))

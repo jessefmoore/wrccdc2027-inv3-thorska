@@ -1,0 +1,68 @@
+esphome:
+  name: loftur
+  friendly_name: LOFTUR
+
+host:
+  mac_address: "02:1c:4b:5a:00:13"
+
+logger:
+
+api:
+
+globals:
+  - id: co2
+    type: float
+    initial_value: "620"
+
+interval:
+  - interval: 10s
+    then:
+      - lambda: |-
+          int speed = 0;
+          long stamp = 0;
+          FILE *f = fopen("/run/showroom/vifta", "r");
+          if (f != nullptr) {
+            if (fscanf(f, "%d %ld", &speed, &stamp) != 2) speed = 0;
+            fclose(f);
+          }
+          if (time(nullptr) - stamp > 30) speed = 0;
+          id(co2) += 20.0f - 0.05f * speed * (id(co2) - 420.0f);
+          if (id(co2) < 420.0f) id(co2) = 420.0f;
+          if (id(co2) > 5000.0f) id(co2) = 5000.0f;
+
+sensor:
+  - platform: template
+    name: CO2
+    unit_of_measurement: ppm
+    device_class: carbon_dioxide
+    state_class: measurement
+    accuracy_decimals: 0
+    update_interval: 10s
+    lambda: return id(co2) + (rand() % 7) - 3;
+  - platform: template
+    name: PM2.5
+    unit_of_measurement: µg/m³
+    device_class: pm25
+    state_class: measurement
+    accuracy_decimals: 1
+    update_interval: 10s
+    lambda: return 6.0f + (rand() % 30) / 10.0f;
+  - platform: template
+    name: Temperature
+    unit_of_measurement: °C
+    device_class: temperature
+    state_class: measurement
+    accuracy_decimals: 1
+    update_interval: 10s
+    lambda: return 21.0f + (rand() % 7 - 3) / 10.0f;
+  - platform: template
+    name: Humidity
+    unit_of_measurement: "%"
+    device_class: humidity
+    state_class: measurement
+    accuracy_decimals: 0
+    update_interval: 10s
+    lambda: return 40.0f + (rand() % 5) - 2;
+  - platform: uptime
+    name: Uptime
+    update_interval: 15s

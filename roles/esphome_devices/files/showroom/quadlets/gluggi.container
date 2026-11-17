@@ -1,0 +1,17 @@
+[Unit]
+Description=gluggi
+
+[Container]
+ContainerName=gluggi
+HostName=gluggi
+Image=showroom.build
+Exec=/usr/local/bin/gluggi
+Network=homeassistant.network
+IP=10.89.10.24
+PublishPort=6056:6053
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=multi-user.target

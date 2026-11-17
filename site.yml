@@ -22,3 +22,5 @@
       tags: podman
     - role: home_assistant
       tags: home_assistant
+    - role: esphome_devices
+      tags: esphome_devices

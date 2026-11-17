@@ -1,0 +1,17 @@
+[Unit]
+Description=ljosi
+
+[Container]
+ContainerName=ljosi
+HostName=ljosi
+Image=showroom.build
+Exec=/usr/local/bin/ljosi
+Network=homeassistant.network
+IP=10.89.10.21
+PublishPort=6053:6053
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=multi-user.target

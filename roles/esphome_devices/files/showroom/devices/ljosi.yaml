@@ -1,0 +1,40 @@
+esphome:
+  name: ljosi
+  friendly_name: LJÓSI
+
+host:
+  mac_address: "02:1c:4b:5a:00:11"
+
+logger:
+
+api:
+
+output:
+  - platform: template
+    id: red
+    type: float
+    write_action: []
+  - platform: template
+    id: green
+    type: float
+    write_action: []
+  - platform: template
+    id: blue
+    type: float
+    write_action: []
+
+light:
+  - platform: rgb
+    name: Light
+    red: red
+    green: green
+    blue: blue
+    restore_mode: ALWAYS_ON
+    effects:
+      - strobe:
+      - random:
+
+sensor:
+  - platform: uptime
+    name: Uptime
+    update_interval: 15s

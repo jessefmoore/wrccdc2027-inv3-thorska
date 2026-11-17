@@ -1,0 +1,7 @@
+[Build]
+ImageTag=localhost/showroom:latest
+File=/opt/showroom/Containerfile
+SetWorkingDirectory=file
+
+[Service]
+TimeoutStartSec=1800

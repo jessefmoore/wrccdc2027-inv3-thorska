@@ -1,0 +1,26 @@
+esphome:
+  name: gluggi
+  friendly_name: GLUGGI
+
+host:
+  mac_address: "02:1c:4b:5a:00:14"
+
+logger:
+
+api:
+
+cover:
+  - platform: template
+    name: Blinds
+    device_class: blind
+    optimistic: true
+    has_position: true
+    position_action: []
+    open_action: []
+    close_action: []
+    stop_action: []
+
+sensor:
+  - platform: uptime
+    name: Uptime
+    update_interval: 15s

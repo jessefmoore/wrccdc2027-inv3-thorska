@@ -1,0 +1,11 @@
+FROM docker.io/esphome/esphome:2025.6.3 AS build
+RUN apt-get update && apt-get install -y --no-install-recommends g++ && rm -rf /var/lib/apt/lists/*
+WORKDIR /config
+COPY devices/ ./
+RUN for d in ljosi loftur vifta gluggi; do esphome compile $d.yaml || exit 1; done
+
+FROM docker.io/library/debian:bookworm-slim
+COPY --from=build /config/.esphome/build/ljosi/.pioenvs/ljosi/program /usr/local/bin/ljosi
+COPY --from=build /config/.esphome/build/loftur/.pioenvs/loftur/program /usr/local/bin/loftur
+COPY --from=build /config/.esphome/build/vifta/.pioenvs/vifta/program /usr/local/bin/vifta
+COPY --from=build /config/.esphome/build/gluggi/.pioenvs/gluggi/program /usr/local/bin/gluggi

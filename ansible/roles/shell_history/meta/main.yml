@@ -1,0 +1,12 @@
+---
+galaxy_info:
+  role_name: shell_history
+  author: Jesse Moore
+  description: Disable root's bash history
+  min_ansible_version: "2.14"
+  platforms:
+    - name: Fedora
+      versions: [all]
+    - name: EL
+      versions: [all]
+dependencies: []

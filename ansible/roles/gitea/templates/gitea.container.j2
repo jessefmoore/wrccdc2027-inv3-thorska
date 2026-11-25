@@ -1,0 +1,23 @@
+[Unit]
+Description=Gitea
+
+[Container]
+ContainerName=gitea
+Image={{ gitea_image }}
+Volume={{ gitea_data_dir }}:/data:Z
+Environment=USER_UID=1000
+Environment=USER_GID=1000
+# Skip the first-run install wizard so / and the API are live immediately -
+# otherwise GET /api/v1/version 404s with a redirect to the wizard until
+# someone completes it by hand.
+Environment=GITEA__security__INSTALL_LOCK=true
+Environment=GITEA__database__DB_TYPE=sqlite3
+PublishPort={{ gitea_http_port }}:3000
+PublishPort={{ gitea_ssh_port }}:22
+
+[Service]
+Restart=always
+TimeoutStartSec=300
+
+[Install]
+WantedBy=multi-user.target

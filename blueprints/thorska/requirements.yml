@@ -1,0 +1,10 @@
+# requirements.yml: pinned Galaxy dependencies for the thorska blueprint.
+# The 8 custom roles (domain_join, shell_history, step_ca, blackteam_ssh,
+# podman, home_assistant, esphome_devices, gitea) are private/single-use and
+# are not listed here - install them with:
+#   ludus ansible role add -d ansible/roles/<name>
+
+collections:
+  - name: community.general
+  - name: ansible.posix
+roles: []

@@ -1,0 +1,7 @@
+manifest_version: 1
+name: "WRCCDC 2027 Inv3 - Thorska"
+description: "Smart-home showroom inject box (Home Assistant, ESPHome/Gitea CI, step-ca, AD domain join, black-team SSH trust) for WRCCDC 2027."
+authors:
+  - "Jesse Moore"
+homepage: https://github.com/wccomps/wrccdc2027-inv3-thorska
+license: UNLICENSED

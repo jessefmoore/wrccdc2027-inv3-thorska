@@ -1,0 +1,153 @@
+- name: Install git and Ansible
+  ansible.builtin.dnf:
+    name: [git-core, ansible-core]
+    state: present
+
+- name: Discover the gitea VM's address
+  when: esphome_devices_gitea_url | length == 0
+  vars:
+    esphome_devices_gitea_inventory_name: "{{ groups['all'] | select('match', '^.*-gitea$') | list | first }}"
+  ansible.builtin.set_fact:
+    esphome_devices_gitea_url: "http://{{ hostvars[esphome_devices_gitea_inventory_name].ansible_default_ipv4.address }}:3000"
+
+# --- Gitea repo -------------------------------------------------------------
+
+- name: Check for the showroom-firmware repo
+  ansible.builtin.uri:
+    url: "{{ esphome_devices_gitea_url }}/api/v1/repos/{{ esphome_devices_gitea_user }}/{{ esphome_devices_repo_name }}"
+    url_username: "{{ esphome_devices_gitea_user }}"
+    url_password: "{{ esphome_devices_gitea_password }}"
+    force_basic_auth: true
+    status_code: [200, 404]
+  register: esphome_devices_repo
+
+- name: Create the showroom-firmware repo
+  when: esphome_devices_repo.status == 404
+  ansible.builtin.uri:
+    url: "{{ esphome_devices_gitea_url }}/api/v1/user/repos"
+    method: POST
+    url_username: "{{ esphome_devices_gitea_user }}"
+    url_password: "{{ esphome_devices_gitea_password }}"
+    force_basic_auth: true
+    body_format: json
+    body:
+      name: "{{ esphome_devices_repo_name }}"
+      description: Firmware and deployment for the smart-home showroom devices
+      default_branch: main
+      auto_init: false
+    status_code: 201
+  changed_when: true
+
+# --- /opt/showroom working copy ---------------------------------------------
+# Only ever created once. Afterwards Gitea is the source of truth and the
+# Actions workflow keeps /opt/showroom up to date.
+
+- name: Check for an existing working copy
+  ansible.builtin.stat:
+    path: /opt/showroom/.git
+  register: esphome_devices_checkout
+
+- name: Seed the new repo from this role
+  when:
+    - not esphome_devices_checkout.stat.exists
+    - esphome_devices_repo.status == 404
+  block:
+    - name: Copy starting files
+      ansible.builtin.copy:
+        src: showroom/
+        dest: /opt/showroom/
+        owner: root
+        group: root
+        mode: u=rwX,go=rX
+
+    - name: Commit and push starting files
+      ansible.builtin.shell:
+        chdir: /opt/showroom
+        cmd: |
+          set -e
+          git init -b main
+          git add -A
+          git -c user.name={{ esphome_devices_gitea_user }} -c user.email={{ esphome_devices_gitea_user }}@ice.land commit -m "Showroom device firmware"
+          git remote add origin {{ esphome_devices_gitea_url }}/{{ esphome_devices_gitea_user }}/{{ esphome_devices_repo_name }}.git
+          git -c http.extraHeader="Authorization: Basic {{ (esphome_devices_gitea_user + ':' + esphome_devices_gitea_password) | b64encode }}" push -u origin main
+        creates: /opt/showroom/.git
+
+- name: Clone the existing repo
+  when:
+    - not esphome_devices_checkout.stat.exists
+    - esphome_devices_repo.status == 200
+  ansible.builtin.command:
+    cmd: git clone {{ esphome_devices_gitea_url }}/{{ esphome_devices_gitea_user }}/{{ esphome_devices_repo_name }}.git /opt/showroom
+    creates: /opt/showroom/.git
+
+- name: Run the first deploy
+  when: not esphome_devices_checkout.stat.exists
+  ansible.builtin.command: ansible-playbook -c local -i localhost, /opt/showroom/deploy.yml
+  register: esphome_devices_first_deploy
+  changed_when: "'changed=0' not in esphome_devices_first_deploy.stdout"
+
+# --- Actions runner -----------------------------------------------------------
+
+- name: Install act_runner
+  ansible.builtin.get_url:
+    url: https://dl.gitea.com/gitea-runner/0.2.11/act_runner-0.2.11-linux-amd64
+    dest: /usr/local/bin/act_runner
+    checksum: sha256:7a5e833793286bbfd9b59ce682bd41fc3f1c096bae1bb2a09b66ab2f6dacf90c
+    owner: root
+    group: root
+    mode: "0755"
+  notify: Restart act_runner
+
+- name: Create runner directory
+  ansible.builtin.file:
+    path: /var/lib/act_runner
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+
+- name: Check for an existing runner registration
+  ansible.builtin.stat:
+    path: /var/lib/act_runner/.runner
+  register: esphome_devices_runner
+
+- name: Register the runner
+  when: not esphome_devices_runner.stat.exists
+  block:
+    # User-level, not repo-level: Gitea 1.22.1 never hands new jobs to a
+    # repo-level runner after its first fetch.
+    - name: Get a registration token for gitadmin
+      ansible.builtin.uri:
+        url: "{{ esphome_devices_gitea_url }}/api/v1/user/actions/runners/registration-token"
+        url_username: "{{ esphome_devices_gitea_user }}"
+        url_password: "{{ esphome_devices_gitea_password }}"
+        force_basic_auth: true
+      register: esphome_devices_runner_token
+
+    - name: Register with Gitea
+      ansible.builtin.command:
+        chdir: /var/lib/act_runner
+        cmd: >-
+          /usr/local/bin/act_runner register --no-interactive
+          --instance {{ esphome_devices_gitea_url }}
+          --token {{ esphome_devices_runner_token.json.token }}
+          --name {{ esphome_devices_runner_name }}
+          --labels {{ esphome_devices_runner_labels }}
+        creates: /var/lib/act_runner/.runner
+      notify: Restart act_runner
+
+- name: Install runner service
+  ansible.builtin.copy:
+    src: act_runner.service
+    dest: /etc/systemd/system/act_runner.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart act_runner
+
+- name: Start runner
+  ansible.builtin.systemd_service:
+    name: act_runner.service
+    state: started
+    enabled: true
+    daemon_reload: true

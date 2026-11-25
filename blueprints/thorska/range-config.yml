@@ -1,0 +1,88 @@
+# Ludus range config - "Thorska Smart-Home Showroom"
+# ---------------------------------------------------------------------------
+# Standalone AD domain (ice.land) + Gitea CI server + the thorska showroom
+# box (Home Assistant, ESPHome firmware delivery, step-ca, black-team SSH
+# trust, shell-history scrubbing).
+#
+# Deploy with:
+#   ludus range config set -f blueprints/thorska/range-config.yml
+#   ludus range deploy
+#
+# Access after deploy (10.<range_second_octet>.10.x):
+#   vattar (AD DC):  .10
+#   gitea:           .20   http://<ip>:3000  (gitadmin / SMBlyRequired!)
+#   thorska:         .30   https://homeassistant.ice.land (admin / SMBlyRequired!)
+#                          step-ca API on :8080, ACME on :9000
+#
+# SSH to any box as a domain account using a step-ca-issued user cert; see
+# ansible/roles/step_ca/BOX_ONBOARDING.md and testing/check_ca_ssh.py.
+
+defaults:
+  ad_domain_admin: Administrator
+  ad_domain_admin_password: "SMBlyRequired!"
+  ad_domain_safe_mode_password: "SMBlyRequired!"
+
+# Guest hostnames (vattar, thorska, ca, homeassistant) are intentionally NOT
+# range_id-prefixed: step_ca, home_assistant's Caddyfile/ldap_auth.sh, and
+# BOX_ONBOARDING.md all hardcode these bare ice.land names. Only vm_name
+# needs the range_id prefix (for uniqueness across concurrently running
+# ranges at the Proxmox level) - the guest-internal AD domain is self
+# contained per range, so the bare names stay portable.
+ludus:
+  # --- AD domain controller -------------------------------------------
+  - vm_name: "{{ range_id }}-vattar"
+    hostname: vattar
+    template: win2022-server-x64-template
+    vlan: 10
+    ip_last_octet: 10
+    ram_gb: 4
+    cpus: 2
+    windows:
+      sysprep: false
+    domain:
+      fqdn: ice.land
+      role: primary-dc
+
+  # --- Gitea CI server, used by esphome_devices for firmware delivery --
+  - vm_name: "{{ range_id }}-gitea"
+    hostname: gitea
+    template: rocky-9-x64-server-template
+    vlan: 10
+    ip_last_octet: 20
+    ram_gb: 2
+    cpus: 2
+    linux: true
+    roles:
+      - podman
+      - gitea
+
+  # --- Thorska showroom box --------------------------------------------
+  - vm_name: "{{ range_id }}-thorska"
+    hostname: thorska
+    template: rocky-9-x64-server-template
+    vlan: 10
+    ip_last_octet: 30
+    ram_gb: 4
+    cpus: 2
+    linux: true
+    testing:
+      snapshot: false
+      block_internet: false
+    roles:
+      - domain_join
+      - shell_history
+      - step_ca
+      - blackteam_ssh
+      - podman
+      - home_assistant
+      - esphome_devices
+    role_vars:
+      domain_join_dns_aliases:
+        - ca
+        - homeassistant
+      step_ca_ip_address: "10.{{ range_second_octet }}.10.30"
+      esphome_devices_gitea_url: "http://10.{{ range_second_octet }}.10.20:3000"
+
+# Shared across every VM/role
+global_role_vars:
+  timezone: "America/Los_Angeles"

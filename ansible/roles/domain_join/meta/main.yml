@@ -1,0 +1,12 @@
+---
+galaxy_info:
+  role_name: domain_join
+  author: Jesse Moore
+  description: Join an AD domain via realmd/sssd and register extra DNS aliases
+  min_ansible_version: "2.14"
+  platforms:
+    - name: Fedora
+      versions: [all]
+    - name: EL
+      versions: [all]
+dependencies: []

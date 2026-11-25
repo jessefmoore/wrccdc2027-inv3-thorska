@@ -1,0 +1,12 @@
+---
+# Leave unset to auto-discover the range's gitea VM by inventory hostname
+# (its vm_name must end in "-gitea") and use its DHCP-leased address - the
+# gitea template is also "unmanaged" (see range-config.yml), so its IP
+# isn't known ahead of time. Set this explicitly to skip discovery.
+esphome_devices_gitea_url: ""
+esphome_devices_gitea_user: gitadmin
+esphome_devices_gitea_password: "SMBlyRequired!"
+esphome_devices_repo_name: showroom-firmware
+# Must match the "runs-on:" label baked into files/showroom/.gitea/workflows/deploy.yml
+esphome_devices_runner_name: thorska
+esphome_devices_runner_labels: thorska:host

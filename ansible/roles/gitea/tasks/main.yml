@@ -1,0 +1,86 @@
+---
+- name: Create Gitea data directory
+  ansible.builtin.file:
+    path: "{{ gitea_data_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+# Gitea only applies GITEA__* env vars while generating a fresh app.ini; a
+# config written before INSTALL_LOCK was added (or by a differently
+# configured run) persists across container recreations via the bind
+# mount and silently ignores the env vars from then on.
+- name: Check for an existing Gitea config
+  ansible.builtin.stat:
+    path: "{{ gitea_data_dir }}/gitea/conf/app.ini"
+  register: gitea_app_ini
+
+- name: Read the existing Gitea config
+  when: gitea_app_ini.stat.exists
+  ansible.builtin.slurp:
+    src: "{{ gitea_data_dir }}/gitea/conf/app.ini"
+  register: gitea_app_ini_content
+
+- name: Remove a stale Gitea config that predates INSTALL_LOCK
+  when:
+    - gitea_app_ini.stat.exists
+    - "'INSTALL_LOCK = true' not in (gitea_app_ini_content.content | b64decode)"
+  block:
+    - name: Stop Gitea before wiping its data
+      ansible.builtin.systemd_service:
+        name: gitea.service
+        state: stopped
+      failed_when: false
+
+    - name: Remove the stale data
+      ansible.builtin.file:
+        path: "{{ gitea_data_dir }}/gitea"
+        state: absent
+
+- name: Install Gitea quadlet
+  ansible.builtin.template:
+    src: gitea.container.j2
+    dest: /etc/containers/systemd/gitea.container
+    owner: root
+    group: root
+    mode: "0644"
+  notify:
+    - Reload systemd
+    - Restart Gitea
+
+# Quadlet units are generated, so they can't be "enabled"; [Install] in the
+# .container file handles starting at boot.
+- name: Start Gitea
+  ansible.builtin.systemd_service:
+    name: gitea.service
+    state: started
+    daemon_reload: true
+
+- name: Wait for Gitea
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ gitea_http_port }}/api/v1/version"
+  register: gitea_up
+  retries: 60
+  delay: 5
+  until: gitea_up.status == 200
+
+- name: Check for the admin account
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ gitea_http_port }}/api/v1/user"
+    url_username: "{{ gitea_admin_user }}"
+    url_password: "{{ gitea_admin_password }}"
+    force_basic_auth: true
+    status_code: [200, 401]
+  register: gitea_admin_check
+
+- name: Create the admin account
+  when: gitea_admin_check.status == 401
+  ansible.builtin.command:
+    cmd: >-
+      podman exec -u git gitea gitea admin user create
+      --username {{ gitea_admin_user }}
+      --password {{ gitea_admin_password }}
+      --email {{ gitea_admin_email }}
+      --admin --must-change-password=false
+  changed_when: true

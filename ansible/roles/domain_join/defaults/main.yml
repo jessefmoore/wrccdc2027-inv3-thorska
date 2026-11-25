@@ -1,0 +1,9 @@
+---
+domain_join_domain: ice.land
+domain_join_user: Administrator
+domain_join_password: "SMBlyRequired!"
+domain_join_crypto_policy_target: "DEFAULT:AD-SUPPORT"
+
+# Extra DNS A records (under domain_join_domain) to point at this host, e.g.
+# ["ca", "homeassistant"] for service hostnames distinct from the box's own.
+domain_join_dns_aliases: []

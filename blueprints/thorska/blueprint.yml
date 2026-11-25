@@ -1,0 +1,15 @@
+manifest_version: 1
+id: thorska
+name: "Thorska Smart-Home Showroom"
+description: A standalone AD domain, Gitea CI server, and smart-home showroom box with step-ca, ESPHome firmware delivery, and black-team SSH trust.
+version: 0.1.0
+config: range-config.yml
+
+tags:
+  - active-directory
+  - iot
+  - pki
+  - ci-cd
+  - home-assistant
+
+min_ludus_version: "2.0.0"

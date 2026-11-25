@@ -1,0 +1,12 @@
+---
+galaxy_info:
+  role_name: home_assistant
+  author: Jesse Moore
+  description: Home Assistant + Caddy TLS proxy with LDAP auth, via podman quadlets
+  min_ansible_version: "2.14"
+  platforms:
+    - name: Fedora
+      versions: [all]
+    - name: EL
+      versions: [all]
+dependencies: []

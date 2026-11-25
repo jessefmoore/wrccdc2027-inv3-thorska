@@ -15,13 +15,51 @@
 - name: Set crypto policy to allow domain joins
   ansible.builtin.command: update-crypto-policies --set DEFAULT:AD-SUPPORT
 
+# Ludus writes this host's own /etc/hosts entry as
+# "<ip> <range-prefixed-proxmox-name> <hostname>" (e.g. "gh06-thorska
+# thorska"), and glibc's resolver treats the first name on the line as
+# canonical. "hostname -f" therefore returns the range-prefixed name, which
+# realm join would otherwise use to name the AD computer account and its
+# SPNs, polluting AD with "GH06-THORSKA$" instead of the intended "THORSKA$".
+- name: Make this host's own FQDN canonical in /etc/hosts
+  ansible.builtin.lineinfile:
+    path: /etc/hosts
+    regexp: '^{{ ansible_default_ipv4.address }}\s'
+    line: "{{ ansible_default_ipv4.address }} {{ ansible_hostname }}.{{ domain_join_domain }} {{ ansible_hostname }} {{ inventory_hostname }}"
+
+# The range's DHCP-assigned resolver is the Ludus router, which can't see
+# the AD zone, so realm join can't find _ldap._tcp.<domain> SRV records
+# until this host's DNS points at the DC. Ludus always puts the domain's
+# Windows VMs in the "windows" group; this blueprint has exactly one, the
+# primary DC.
+- name: Check current DNS configuration
+  ansible.builtin.command: cat /etc/resolv.conf
+  register: domain_join_resolv_conf
+  changed_when: false
+
+- name: Discover the domain controller's IP
+  ansible.builtin.set_fact:
+    domain_join_dc_ip: "{{ hostvars[groups['windows'][0]].ansible_host }}"
+  when: groups['windows'] | default([]) | length > 0
+
+- name: Point this host's DNS at the domain controller
+  when:
+    - domain_join_dc_ip is defined
+    - domain_join_dc_ip not in domain_join_resolv_conf.stdout
+  ansible.builtin.shell:
+    cmd: |
+      set -e
+      nmcli connection modify {{ ansible_default_ipv4.interface }} ipv4.dns {{ domain_join_dc_ip }} ipv4.ignore-auto-dns yes
+      nmcli connection up {{ ansible_default_ipv4.interface }}
+  changed_when: true
+
 - name: Check current realm membership
   ansible.builtin.command: realm list --name-only
   register: domain_join_realms
   changed_when: false
 
 - name: Join the domain
-  ansible.builtin.command: realm join --user={{ domain_join_user }} {{ domain_join_domain }}
+  ansible.builtin.command: realm join --computer-name={{ ansible_hostname }} --user={{ domain_join_user }} {{ domain_join_domain }}
   args:
     stdin: "{{ domain_join_password }}"
   no_log: true
@@ -54,12 +92,25 @@
     domain_join_self_ip: "{{ ansible_default_ipv4.address }}"
   when: domain_join_dns_aliases | length > 0
 
+# host/{{ ansible_fqdn }} would use the same Ludus /etc/hosts-derived name
+# that the /etc/hosts fix above corrects - use the real FQDN directly.
 - name: Obtain a Kerberos ticket for the host principal
-  ansible.builtin.command: kinit -k "host/{{ ansible_fqdn }}"
+  ansible.builtin.command: kinit -k "host/{{ ansible_hostname }}.{{ domain_join_domain }}"
+  register: domain_join_kinit
+  failed_when: false
   changed_when: false
   when: domain_join_dns_aliases | length > 0
 
+# On at least one observed DC the host/<fqdn> SPN write during realm join
+# fails server-side with "Insufficient permissions ... CONSTRAINT_ATT_TYPE"
+# on servicePrincipalName even though the join itself succeeds (the account
+# and its own machine credentials work fine) - likely an AD-side policy on
+# that DC, not fixable from the client. Degrade to a warning rather than
+# failing the whole deploy over an optional nice-to-have.
 - name: Register extra DNS aliases for this host
+  when:
+    - domain_join_dns_aliases | length > 0
+    - domain_join_kinit.rc == 0
   ansible.builtin.shell: |
     set -e
     nsupdate -g <<EOF
@@ -70,7 +121,17 @@
     EOF
   loop: "{{ domain_join_dns_aliases }}"
   changed_when: true
-  when: domain_join_dns_aliases | length > 0
+
+- name: Warn that DNS aliases could not be self-registered
+  when:
+    - domain_join_dns_aliases | length > 0
+    - domain_join_kinit.rc != 0
+  ansible.builtin.debug:
+    msg: >-
+      Could not obtain a host/ Kerberos ticket (see domain_join_kinit.stderr),
+      so DNS aliases {{ domain_join_dns_aliases }} were not registered.
+      This usually means the host/ SPN was never written to AD for this
+      computer account - check permissions on the DC.
 
 - name: Remove legacy sudo access for AD domain admins
   ansible.builtin.file:

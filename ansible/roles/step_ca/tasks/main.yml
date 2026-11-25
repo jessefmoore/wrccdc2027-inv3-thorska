@@ -144,6 +144,17 @@
         group: "{{ step_ca_group }}"
         mode: "0400"
 
+# step ca init creates config/certs/templates under STEPPATH itself, and on
+# at least one observed box they came out owned by root despite become_user
+# above - leaving step-ca.service (User=step) unable to read its own config.
+- name: Ensure the CA directory is owned by the service account
+  ansible.builtin.file:
+    path: "{{ step_ca_directory }}"
+    state: directory
+    owner: "{{ step_ca_user }}"
+    group: "{{ step_ca_group }}"
+    recurse: true
+
 - name: Install the Step root in the system trust store
   ansible.builtin.copy:
     src: "{{ step_ca_directory }}/certs/root_ca.crt"
@@ -169,6 +180,8 @@
 
 # Line-based (not copy) so blackteam_ssh can add its CA key to the same file.
 # sshd only honors the first TrustedUserCAKeys, so every CA has to share it.
+# No setype: sshd_etc_t isn't a real type in RHEL9's policy (matchpathcon
+# shows sshd_config itself is etc_t there), so setting it fails outright.
 - name: Install the SSH User CA trust key
   ansible.builtin.lineinfile:
     path: "{{ step_ca_ssh_trusted_user_ca_path }}"
@@ -177,7 +190,6 @@
     owner: root
     group: root
     mode: "0644"
-    setype: sshd_etc_t
   notify: Reload sshd
 
 - name: Configure OpenSSH certificate authentication
@@ -281,12 +293,16 @@
   when: step_ca_api_source.changed or not step_ca_api_binary.stat.exists
   notify: Restart step-ca API
 
+# go build writes via a temp file and renames it into place, which keeps the
+# temp file's user_tmp_t label instead of /usr/local/bin's bin_t - systemd
+# (init_t) is then denied execute permission on it.
 - name: Set step-ca API binary permissions
   ansible.builtin.file:
     path: /usr/local/bin/step-ca-api
     owner: root
     group: root
     mode: "0755"
+    setype: bin_t
 
 - name: Install the shared step-ca API token
   ansible.builtin.copy:

@@ -7,7 +7,6 @@
     line: "{{ blackteam_ssh_ca_pubkey }}"
     create: true
     mode: "0644"
-    setype: sshd_etc_t
   notify: Reload sshd
 
 # Prints the username itself (so step-ca certs keep working, like

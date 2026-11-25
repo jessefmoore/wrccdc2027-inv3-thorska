@@ -9,6 +9,12 @@
         state: directory
         mode: "0755"
 
+    - name: Create quadlet directory
+      ansible.builtin.file:
+        path: /etc/containers/systemd
+        state: directory
+        mode: "0755"
+
     - name: Install quadlets
       ansible.builtin.copy:
         src: /opt/showroom/quadlets/{{ item }}
@@ -24,7 +30,6 @@
       register: quadlets
 
     - name: Reload systemd
-      when: quadlets is changed
       ansible.builtin.systemd_service:
         daemon_reload: true
 

@@ -71,8 +71,12 @@
     section: "domain/{{ domain_join_domain | lower }}"
     option: "{{ item.option }}"
     value: "{{ item.value }}"
+    # sssd's own startup check requires sssd.conf to be owned root:root -
+    # group: sssd (even at mode 0600, where the group bits grant nothing)
+    # still fails that check with "File ownership and permissions check
+    # failed" (exit code 4/NOPERMISSION), so sssd refuses to start.
     owner: root
-    group: sssd
+    group: root
     mode: "0600"
   loop:
     - { option: use_fully_qualified_names, value: "False" }
